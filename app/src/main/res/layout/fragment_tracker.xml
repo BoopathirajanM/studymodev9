@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    tools:context=".TrackerFragment">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Weekly Study Sessions"
+        android:textAppearance="@style/TextAppearance.AppCompat.Title"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp"/>
+
+    <com.github.mikephil.charting.charts.BarChart
+        android:id="@+id/weeklyBarChart"
+        android:layout_width="match_parent"
+        android:layout_height="300dp"
+        android:layout_marginTop="80dp"/>
+
+    <!-- Y-axis label -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Hours"
+        android:layout_gravity="start"
+        android:layout_marginTop="4dp"/>
+
+    <TextView
+        android:id="@+id/quoteHeadingTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Quote for you!!!"
+        android:textStyle="bold"
+        android:textSize="18sp"
+        android:textColor="#333"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="86dp" />
+
+
+    <!-- Quote TextView (added below the graph) -->
+    <TextView
+        android:id="@+id/quoteTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Consistency is the key to success."
+        android:textAlignment="center"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:textStyle="bold|italic"
+        android:layout_marginTop="14dp"
+        android:layout_gravity="center"
+        android:background="@drawable/quote_background"
+        android:padding="16dp"
+        android:elevation="4dp"
+        android:shadowColor="#000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"/>
+
+
+</LinearLayout>
