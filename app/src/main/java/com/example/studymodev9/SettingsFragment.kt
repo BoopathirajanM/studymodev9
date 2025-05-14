@@ -22,18 +22,25 @@ import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.RecyclerView
 import androidx.appcompat.widget.SearchView
 import android.util.Log
+import android.content.ComponentName
+import android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
 
 class SettingsFragment : Fragment() {
     private lateinit var overlayPermissionStatus: TextView
     private lateinit var overlayPermissionButton: Button
+    private lateinit var notificationListenerStatus: TextView
+    private lateinit var notificationListenerButton: Button
     private lateinit var appsLayout: LinearLayout
+    private lateinit var blockedAppsLayout: LinearLayout
     private lateinit var addAppButton: Button
+    private lateinit var addBlockedAppButton: Button
     private lateinit var aboutTextView: TextView
     private lateinit var phoneStatePermissionStatus: TextView
     private lateinit var phoneStatePermissionButton: Button
 
     private val OVERLAY_PERMISSION_REQUEST_CODE = 1234
     private val PHONE_STATE_PERMISSION_REQUEST_CODE = 1237
+    private val NOTIFICATION_PERMISSION_REQUEST_CODE = 1238
 
     private val maxApps = 2
 
@@ -47,17 +54,22 @@ class SettingsFragment : Fragment() {
         // Initialize permission views
         overlayPermissionStatus = view.findViewById(R.id.overlayPermissionStatus)
         overlayPermissionButton = view.findViewById(R.id.overlayPermissionButton)
+        notificationListenerStatus = view.findViewById(R.id.notificationListenerStatus)
+        notificationListenerButton = view.findViewById(R.id.notificationListenerButton)
         phoneStatePermissionStatus = view.findViewById(R.id.phoneStatePermissionStatus)
         phoneStatePermissionButton = view.findViewById(R.id.phoneStatePermissionButton)
 
         // Initialize emergency features views
         appsLayout = view.findViewById(R.id.appsLayout)
+        blockedAppsLayout = view.findViewById(R.id.blockedAppsLayout)
         addAppButton = view.findViewById(R.id.addAppButton)
+        addBlockedAppButton = view.findViewById(R.id.addBlockedAppButton)
         aboutTextView = view.findViewById(R.id.aboutTextView)
 
         updatePermissionStatus()
         setupPermissionButtons()
         setupEmergencyFeatures()
+        setupBlockedApps()
         setupAboutSection()
 
         return view
@@ -225,10 +237,113 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    private fun setupBlockedApps() {
+        addBlockedAppButton.setOnClickListener {
+            if (!isNotificationListenerEnabled()) {
+                showNotificationListenerPermissionDialog()
+            } else {
+                showBlockedAppSelectionDialog()
+            }
+        }
+    }
+
+    private fun showNotificationListenerPermissionDialog() {
+        AlertDialog.Builder(requireContext())
+            .setTitle("Permission Required")
+            .setMessage("To block notifications from apps, StudyMode needs permission to access notifications. Would you like to grant this permission?")
+            .setPositiveButton("Grant") { _, _ ->
+                startActivity(Intent(ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showBlockedAppSelectionDialog() {
+        val packageManager = requireContext().packageManager
+        val dialog = AlertDialog.Builder(requireContext()).create()
+        val dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_app_selection, null)
+        
+        val recyclerView = dialogView.findViewById<RecyclerView>(R.id.appsRecyclerView)
+        val searchView = dialogView.findViewById<SearchView>(R.id.searchView)
+        val okButton = dialogView.findViewById<Button>(R.id.buttonOK)
+        
+        recyclerView.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(requireContext())
+        recyclerView.setHasFixedSize(true)
+
+        var selectedApp: AppSelectionAdapter.AppInfo? = null
+        val adapter = AppSelectionAdapter(mutableListOf()) { app ->
+            selectedApp = app
+            okButton.visibility = View.VISIBLE
+        }
+        recyclerView.adapter = adapter
+
+        var fullAppList = listOf<AppSelectionAdapter.AppInfo>()
+
+        dialog.setView(dialogView)
+        dialog.show()
+        
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            val installedApps = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+            fullAppList = installedApps
+                .asSequence()
+                .filter { appInfo ->
+                    try {
+                        packageManager.getLaunchIntentForPackage(appInfo.packageName) != null &&
+                        appInfo.packageName != requireContext().packageName
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                .map { appInfo ->
+                    AppSelectionAdapter.AppInfo(
+                        packageName = appInfo.packageName,
+                        appName = packageManager.getApplicationLabel(appInfo).toString(),
+                        icon = packageManager.getApplicationIcon(appInfo),
+                        isPaymentApp = false
+                    )
+                }
+                .sortedBy { it.appName }
+                .toList()
+
+            recyclerView.post {
+                adapter.updateApps(fullAppList)
+            }
+        }
+
+        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean = false
+
+            override fun onQueryTextChange(newText: String?): Boolean {
+                if (newText.isNullOrBlank()) {
+                    adapter.updateApps(fullAppList)
+                } else {
+                    val filteredApps = fullAppList.filter { 
+                        it.appName.contains(newText, ignoreCase = true) 
+                    }
+                    adapter.updateApps(filteredApps)
+                }
+                return true
+            }
+        })
+
+        okButton.setOnClickListener {
+            selectedApp?.let { app ->
+                addBlockedAppView(app.appName, app.packageName)
+                dialog.dismiss()
+            }
+        }
+
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.9).toInt(),
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
     override fun onResume() {
         super.onResume()
         updatePermissionStatus()
         loadSavedContactsAndApps()
+        loadBlockedApps()
     }
 
     private fun updatePermissionStatus() {
@@ -257,6 +372,19 @@ class SettingsFragment : Fragment() {
             phoneStatePermissionButton.text = "Grant"
             phoneStatePermissionButton.isEnabled = true
         }
+
+        // Update notification listener status
+        if (isNotificationListenerEnabled()) {
+            notificationListenerStatus.text = "Granted"
+            notificationListenerStatus.setTextColor(Color.GREEN)
+            notificationListenerButton.text = "Granted"
+            notificationListenerButton.isEnabled = false
+        } else {
+            notificationListenerStatus.text = "Not Granted"
+            notificationListenerStatus.setTextColor(Color.RED)
+            notificationListenerButton.text = "Grant"
+            notificationListenerButton.isEnabled = true
+        }
     }
 
     private fun setupPermissionButtons() {
@@ -268,9 +396,12 @@ class SettingsFragment : Fragment() {
             startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
         }
 
-
         phoneStatePermissionButton.setOnClickListener {
             requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), PHONE_STATE_PERMISSION_REQUEST_CODE)
+        }
+
+        notificationListenerButton.setOnClickListener {
+            startActivity(Intent(ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
     }
 
@@ -289,14 +420,12 @@ class SettingsFragment : Fragment() {
                 val container = appsLayout.getChildAt(i) as? LinearLayout
                 val textView = container?.findViewById<TextView>(android.R.id.text1)
                 if (textView?.text?.toString() == appName) {
-                    Toast.makeText(requireContext(), "This app is already added", Toast.LENGTH_SHORT).show()
                     return
                 }
             }
 
             // Check maximum limit
             if (appsLayout.childCount >= maxApps) {
-                Toast.makeText(requireContext(), "Maximum $maxApps emergency apps allowed", Toast.LENGTH_SHORT).show()
                 return
             }
 
@@ -306,12 +435,8 @@ class SettingsFragment : Fragment() {
 
             // Save to SharedPreferences
             SharedPreferencesManager.getInstance(requireContext()).saveEmergencyApp(appName, packageName)
-
-            // Show success message
-            Toast.makeText(requireContext(), "$appName added as emergency app", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e("SettingsFragment", "Error adding app view", e)
-            Toast.makeText(requireContext(), "Error adding app: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -385,16 +510,14 @@ class SettingsFragment : Fragment() {
 
     private fun showDeleteConfirmationDialog(container: LinearLayout, appName: String) {
         AlertDialog.Builder(requireContext())
-            .setTitle("Remove Emergency App")
-            .setMessage("Are you sure you want to remove $appName from emergency apps?")
+            .setTitle("Remove App")
+            .setMessage("Remove $appName from emergency apps?")
             .setPositiveButton("Remove") { _, _ ->
                 try {
                     appsLayout.removeView(container)
                     SharedPreferencesManager.getInstance(requireContext()).removeEmergencyApp(appName)
-                    Toast.makeText(requireContext(), "$appName removed from emergency apps", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Log.e("SettingsFragment", "Error removing app", e)
-                    Toast.makeText(requireContext(), "Error removing app: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -410,5 +533,119 @@ class SettingsFragment : Fragment() {
         savedApps.forEach { (appName, packageName) ->
             addAppView(appName, packageName)
         }
+    }
+
+    private fun addBlockedAppView(appName: String, packageName: String) {
+        try {
+            // Check for duplicates
+            for (i in 0 until blockedAppsLayout.childCount) {
+                val container = blockedAppsLayout.getChildAt(i) as? LinearLayout
+                val textView = container?.findViewById<TextView>(android.R.id.text1)
+                if (textView?.text?.toString() == appName) {
+                    return
+                }
+            }
+
+            // Create app container view
+            val appContainer = createBlockedAppContainer(appName, packageName)
+            blockedAppsLayout.addView(appContainer)
+
+            // Save to SharedPreferences
+            SharedPreferencesManager.getInstance(requireContext()).saveBlockedApp(appName, packageName)
+
+            // Request notification access if needed
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (!NotificationManagerCompat.from(requireContext()).areNotificationsEnabled()) {
+                    requestPermissions(
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                        NOTIFICATION_PERMISSION_REQUEST_CODE
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("SettingsFragment", "Error adding blocked app view", e)
+        }
+    }
+
+    private fun createBlockedAppContainer(appName: String, packageName: String): LinearLayout {
+        return LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setPadding(16, 8, 16, 8)
+
+            addView(createBlockedAppInfoView(appName, packageName))
+            addView(createBlockedAppDeleteButton(this, appName))
+        }
+    }
+
+    private fun createBlockedAppInfoView(appName: String, packageName: String): TextView {
+        return TextView(requireContext()).apply {
+            text = appName
+            id = android.R.id.text1
+            try {
+                val appIcon = requireContext().packageManager.getApplicationIcon(packageName)
+                setCompoundDrawablesWithIntrinsicBounds(appIcon, null, null, null)
+            } catch (e: PackageManager.NameNotFoundException) {
+                setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_menu_close_clear_cancel, 0, 0, 0)
+            }
+            compoundDrawablePadding = 16
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1.0f
+            )
+        }
+    }
+
+    private fun createBlockedAppDeleteButton(container: LinearLayout, appName: String): ImageButton {
+        return ImageButton(requireContext()).apply {
+            setImageResource(android.R.drawable.ic_menu_delete)
+            setBackgroundResource(android.R.drawable.btn_default)
+            setPadding(16, 16, 16, 16)
+            imageTintList = android.content.res.ColorStateList.valueOf(Color.RED)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                marginStart = 16
+            }
+            setOnClickListener {
+                showBlockedAppDeleteConfirmationDialog(container, appName)
+            }
+        }
+    }
+
+    private fun showBlockedAppDeleteConfirmationDialog(container: LinearLayout, appName: String) {
+        AlertDialog.Builder(requireContext())
+            .setTitle("Remove App")
+            .setMessage("Remove $appName from blocked apps?")
+            .setPositiveButton("Remove") { _, _ ->
+                try {
+                    blockedAppsLayout.removeView(container)
+                    SharedPreferencesManager.getInstance(requireContext()).removeBlockedApp(appName)
+                } catch (e: Exception) {
+                    Log.e("SettingsFragment", "Error removing blocked app", e)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun loadBlockedApps() {
+        blockedAppsLayout.removeAllViews()
+        val blockedApps = SharedPreferencesManager.getInstance(requireContext()).getBlockedApps()
+        blockedApps.forEach { (appName, packageName) ->
+            addBlockedAppView(appName, packageName)
+        }
+    }
+
+    private fun isNotificationListenerEnabled(): Boolean {
+        val packageName = requireContext().packageName
+        val flat = Settings.Secure.getString(requireContext().contentResolver, "enabled_notification_listeners")
+        return flat?.contains(packageName) == true
     }
 }

@@ -17,6 +17,7 @@ class SharedPreferencesManager private constructor(context: Context) {
         private const val KEY_EMERGENCY_CONTACTS = "emergency_contacts"
         private const val KEY_EMERGENCY_APPS = "emergency_apps"
         private const val KEY_STUDY_SESSIONS = "study_sessions"
+        private const val KEY_BLOCKED_APPS = "blocked_apps"
         
         @Volatile
         private var instance: SharedPreferencesManager? = null
@@ -84,26 +85,108 @@ class SharedPreferencesManager private constructor(context: Context) {
 
     fun saveEmergencyApp(appName: String, packageName: String) {
         try {
-            val apps = getEmergencyApps().toMutableMap()
-            if (apps.size < 2 && !apps.containsKey(appName)) {
-                apps[appName] = packageName
-                val serializedApps = apps.entries.joinToString("|") { "${it.key},${it.value}" }
-                sharedPreferences.edit()
-                    .putString(KEY_EMERGENCY_APPS, serializedApps)
-                    .apply()
-                Log.d("SharedPrefManager", "Saved emergency app: $appName")
-            } else {
-                Log.w("SharedPrefManager", "Failed to save app: $appName (limit reached or duplicate)")
-            }
+            // Get current apps directly from preferences to avoid recursion
+            val currentApps = getEmergencyAppsRaw().toMutableMap()
+            currentApps[appName] = packageName
+            val json = gson.toJson(currentApps)
+            sharedPreferences.edit().putString(KEY_EMERGENCY_APPS, json).apply()
         } catch (e: Exception) {
-            Log.e("SharedPrefManager", "Error saving emergency app: $appName", e)
+            Log.e("SharedPrefManager", "Error saving emergency app", e)
         }
     }
+
+    private fun getEmergencyAppsRaw(): Map<String, String> {
+        val storedValue = sharedPreferences.getString(KEY_EMERGENCY_APPS, null)
+        if (storedValue == null || storedValue == "{}") {
+            return emptyMap()
+        }
+
+        // Try parsing as JSON format
+        return try {
+            val type = object : TypeToken<Map<String, String>>() {}.type
+            gson.fromJson(storedValue, type) ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun getEmergencyApps(): Map<String, String> {
+        try {
+            val storedValue = sharedPreferences.getString(KEY_EMERGENCY_APPS, null)
+            if (storedValue == null || storedValue == "{}") {
+                return emptyMap()
+            }
+
+            // Try parsing as new JSON format
+            try {
+                val type = object : TypeToken<Map<String, String>>() {}.type
+                return gson.fromJson(storedValue, type) ?: emptyMap()
+            } catch (e: JsonSyntaxException) {
+                // If JSON parsing fails, try parsing old format and migrate
+                try {
+                    // Old format was using | as separator and , for key-value pairs
+                    val migratedData = storedValue.split("|")
+                        .filter { it.isNotEmpty() }
+                        .map { 
+                            val parts = it.split(",")
+                            if (parts.size >= 2) {
+                                parts[0].trim() to parts[1].trim()
+                            } else {
+                                null
+                            }
+                        }
+                        .filterNotNull()
+                        .toMap()
+
+                    // Migrate to new format if we have data
+                    if (migratedData.isNotEmpty()) {
+                        val json = gson.toJson(migratedData)
+                        sharedPreferences.edit().putString(KEY_EMERGENCY_APPS, json).apply()
+                    }
+
+                    return migratedData
+                } catch (e: Exception) {
+                    Log.e("SharedPrefManager", "Error parsing old format", e)
+                    return emptyMap()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("SharedPrefManager", "Error getting emergency apps", e)
+            return emptyMap()
+        }
+    }
+
+    fun removeEmergencyApp(appName: String) {
+        val apps = getEmergencyApps().toMutableMap()
+        apps.remove(appName)
+        val json = gson.toJson(apps)
+        sharedPreferences.edit().putString(KEY_EMERGENCY_APPS, json).apply()
+    }
+
+    fun saveBlockedApp(appName: String, packageName: String) {
+        val apps = getBlockedApps().toMutableMap()
+        apps[appName] = packageName
+        val json = gson.toJson(apps)
+        sharedPreferences.edit().putString(KEY_BLOCKED_APPS, json).apply()
+    }
+
+    fun getBlockedApps(): Map<String, String> {
+        val json = sharedPreferences.getString(KEY_BLOCKED_APPS, "{}")
+        val type = object : TypeToken<Map<String, String>>() {}.type
+        return gson.fromJson(json, type) ?: emptyMap()
+    }
+
+    fun removeBlockedApp(appName: String) {
+        val apps = getBlockedApps().toMutableMap()
+        apps.remove(appName)
+        val json = gson.toJson(apps)
+        sharedPreferences.edit().putString(KEY_BLOCKED_APPS, json).apply()
+    }
+
     fun saveWeeklyStudyHours(hoursList: FloatArray) {
         // Save the updated weekly study hours back to SharedPreferences
         sharedPreferences.edit().putString(KEY_STUDY_SESSIONS, gson.toJson(hoursList)).apply()
     }
-
 
     fun addStudyHoursToDay(dayIndex: Int, hoursToAdd: Float) {
         val hoursList = getWeeklyStudyHours().toMutableList()  // Get current weekly hours list
@@ -113,65 +196,6 @@ class SharedPreferencesManager private constructor(context: Context) {
         saveWeeklyStudyHours(hoursList.toFloatArray())  // Save the updated list back to SharedPreferences
     }
 
-    fun getEmergencyApps(): Map<String, String> {
-        try {
-            val serializedApps = sharedPreferences.getString(KEY_EMERGENCY_APPS, "") ?: ""
-            return if (serializedApps.isEmpty()) {
-                emptyMap()
-            } else {
-                serializedApps.split("|")
-                    .mapNotNull {
-                        try {
-                            val parts = it.split(",")
-                            if (parts.size >= 2) {
-                                Pair(parts[0].trim(), parts[1].trim())
-                            } else {
-                                Log.w("SharedPrefManager", "Malformed app entry: $it")
-                                null
-                            }
-                        } catch (e: Exception) {
-                            Log.e("SharedPrefManager", "Error parsing app entry: $it", e)
-                            null
-                        }
-                    }
-                    .take(2) // Ensure we never return more than 2 apps
-                    .toMap()
-            }
-        } catch (e: Exception) {
-            Log.e("SharedPrefManager", "Error getting emergency apps", e)
-            return emptyMap()
-        }
-    }
-    
-    fun removeEmergencyApp(appName: String) {
-        try {
-            val apps = getEmergencyApps().toMutableMap()
-            if (apps.containsKey(appName)) {
-                apps.remove(appName)
-                val serializedApps = apps.entries.joinToString("|") { "${it.key},${it.value}" }
-                sharedPreferences.edit()
-                    .putString(KEY_EMERGENCY_APPS, serializedApps)
-                    .apply()
-                Log.d("SharedPrefManager", "Removed emergency app: $appName")
-            } else {
-                Log.w("SharedPrefManager", "App not found for removal: $appName")
-            }
-        } catch (e: Exception) {
-            Log.e("SharedPrefManager", "Error removing emergency app: $appName", e)
-        }
-    }
-
-    fun clearEmergencyApps() {
-        try {
-            sharedPreferences.edit()
-                .remove(KEY_EMERGENCY_APPS)
-                .apply()
-            Log.d("SharedPrefManager", "Cleared all emergency apps")
-        } catch (e: Exception) {
-            Log.e("SharedPrefManager", "Error clearing emergency apps", e)
-        }
-    }
-
     fun saveStudySession(session: StudySession) {
         val sessions = getStudySessions().toMutableList()
         sessions.add(session)
@@ -179,7 +203,6 @@ class SharedPreferencesManager private constructor(context: Context) {
         sharedPreferences.edit().putString(KEY_STUDY_SESSIONS, json).apply()
         Log.d("SharedPrefs", "Session added: $session")  // Log session being saved
     }
-
 
     fun getStudySessions(): List<StudySession> {
         val json = sharedPreferences.getString(KEY_STUDY_SESSIONS, null)
@@ -201,8 +224,6 @@ class SharedPreferencesManager private constructor(context: Context) {
         return emptyList()  // Return an empty list if no valid data is found
     }
 
-
-
     fun getWeeklyStudyHours(): FloatArray {
         val sessions = getStudySessions()
         val weeklyHours = FloatArray(7) { 0f }
@@ -223,5 +244,4 @@ class SharedPreferencesManager private constructor(context: Context) {
 
         return weeklyHours
     }
-
 } 
